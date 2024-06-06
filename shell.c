@@ -20,17 +20,15 @@ char *last_command = NULL;
 char prompt[] = "hello:";
 char *outfile;
 char *infile;
-int i, fd, amper, redirect, piping, retid, status, in_redirect;
-char *argv[MAX_ARGS];
-char *argv2[MAX_ARGS];
+int fd, amper, redirect, in_redirect;
+char **argvs[10]; // Support for up to 10 commands in a pipeline
+int var_count = 0;
+char *variables[MAX_ARGS];
+char *values[MAX_ARGS];
 char *history[HISTORY_SIZE];
 int history_index = 0;
 int history_count = 0;
 int history_cursor = 0;
-char *variables[MAX_ARGS];
-char *values[MAX_ARGS];
-int var_count = 0;
-int if_block = 0;
 
 struct sigaction sa;
 
@@ -84,82 +82,6 @@ void execute_command(char **argv)
     }
 }
 
-void execute_if_process(char *command)
-{
-    char *_if = strstr(command, "if");
-    char *_then = strstr(command, "then");
-    char *_else = strstr(command, "else");
-    char *_fi = strstr(command, "fi");
-
-    if (!_if ||
-        !_then ||
-        !_fi)
-    {
-        printf("execvp: Bad 'if' syntax\n");
-        return;
-    }
-
-    // separate each part
-    *_then = '\0';
-    _then += 5;
-    char *cond_exec = _if + 3;
-
-    if (_else)
-    {
-        *_else = '\0';
-        _else += 5;
-        *_fi = '\0';
-    }
-    else
-    {
-        _else = _fi;
-        _else[0] = '\0';
-    }
-
-    // check the condition
-    int return_stat = system(cond_exec);
-
-    // if the condition is valid
-    if (return_stat == 0)
-    {
-        system(_then);
-    }
-    else
-    {
-        // else run the else command
-        if (*_else)
-        {
-            system(_else);
-        }
-    }
-}
-
-void execute_pipe(char **argv1, char **argv2)
-{
-    int fildes[2];
-    pipe(fildes);
-    if (fork() == 0)
-    {
-        close(STDOUT_FILENO);
-        dup(fildes[1]);
-        close(fildes[1]);
-        close(fildes[0]);
-        execvp(argv1[0], argv1);
-        perror("execvp");
-        exit(EXIT_FAILURE);
-    }
-    else
-    {
-        close(STDIN_FILENO);
-        dup(fildes[0]);
-        close(fildes[0]);
-        close(fildes[1]);
-        execvp(argv2[0], argv2);
-        perror("execvp");
-        exit(EXIT_FAILURE);
-    }
-}
-
 void handle_redirects(int redirect, char *outfile, int in_redirect, char *infile)
 {
     if (in_redirect == 1)
@@ -180,7 +102,6 @@ void handle_redirects(int redirect, char *outfile, int in_redirect, char *infile
         dup(fd);
         close(fd);
     }
-
     else if (redirect == 2)
     {
         fd = open(outfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -236,6 +157,7 @@ void clear_line()
 void handle_input()
 {
     char ch;
+    int len = 0;
     int pos = 0;
     memset(command, 0, MAX_COMMAND_LEN);
     display_prompt();
@@ -252,6 +174,7 @@ void handle_input()
         {
             if (pos > 0)
             {
+                len--;
                 pos--;
                 command[pos] = '\0';
                 clear_line();
@@ -271,7 +194,7 @@ void handle_input()
                         {
                             history_cursor--;
                             strcpy(command, history[history_cursor]);
-                            pos = strlen(command);
+                            pos = len = strlen(command);
                             clear_line();
                             display_prompt();
                         }
@@ -282,16 +205,34 @@ void handle_input()
                         {
                             history_cursor++;
                             strcpy(command, history[history_cursor]);
-                            pos = strlen(command);
+                            pos = len = strlen(command);
                             clear_line();
                             display_prompt();
                         }
                         else
                         {
                             command[0] = '\0';
-                            pos = 0;
+                            pos = len = 0;
                             clear_line();
                             display_prompt();
+                        }
+                    }
+                    else if (seq[1] == 'C') // Right arrow
+                    {
+                        if (pos < len)
+                        {
+                            pos++;
+                            printf("\033[C");
+                            fflush(stdout);
+                        }
+                    }
+                    else if (seq[1] == 'D') // Left arrow
+                    {
+                        if (pos > 0)
+                        {
+                            pos--;
+                            printf("\033[D");
+                            fflush(stdout);
                         }
                     }
                 }
@@ -300,7 +241,66 @@ void handle_input()
         else
         {
             command[pos++] = ch;
+            len++;
+            clear_line();
             display_prompt();
+        }
+    }
+}
+
+void parse_command(char *cmd, char ***argv, int *argc)
+{
+    *argc = 0;
+    char *token = strtok(cmd, " ");
+    while (token != NULL)
+    {
+        (*argv)[*argc] = token;
+        (*argc)++;
+        token = strtok(NULL, " ");
+    }
+    (*argv)[*argc] = NULL;
+}
+
+void execute_if_process(char *command)
+{
+    char *_if = strstr(command, "if");
+    char *_then = strstr(command, "then");
+    char *_else = strstr(command, "else");
+    char *_fi = strstr(command, "fi");
+
+    if (!_if || !_then || !_fi)
+    {
+        printf("execvp: Bad 'if' syntax\n");
+        return;
+    }
+
+    *_then = '\0';
+    _then += 5;
+    char *cond_exec = _if + 3;
+
+    if (_else)
+    {
+        *_else = '\0';
+        _else += 5;
+        *_fi = '\0';
+    }
+    else
+    {
+        _else = _fi;
+        _else[0] = '\0';
+    }
+
+    int return_stat = system(cond_exec);
+
+    if (return_stat == 0)
+    {
+        system(_then);
+    }
+    else
+    {
+        if (*_else)
+        {
+            system(_else);
         }
     }
 }
@@ -327,108 +327,104 @@ void run_shell()
         update_last_command(command);
         add_to_history(command);
 
-        i = 0;
-        piping = 0;
-        in_redirect = 0;
-        token = strtok(command, " ");
+        if (strstr(command, "if ") != NULL && strstr(command, " then ") != NULL && strstr(command, " fi") != NULL)
+        {
+            execute_if_process(command);
+            continue;
+        }
+
+        int argc = 0;
+        int num_pipes = 0;
+        char *commands[10];
+        char *token = strtok(command, "|");
         while (token != NULL)
         {
-            argv[i] = token;
-            token = strtok(NULL, " ");
-            i++;
-            if (token && strcmp(token, "|") == 0)
-            {
-                piping = 1;
-                argv[i] = NULL;
-                i = 0;
-                token = strtok(NULL, " ");
-                while (token != NULL)
-                {
-                    argv2[i] = token;
-                    token = strtok(NULL, " ");
-                    i++;
-                }
-                argv2[i] = NULL;
-                break;
-            }
+            commands[num_pipes++] = token;
+            token = strtok(NULL, "|");
         }
-        argv[i] = NULL;
 
-        if (argv[0] == NULL)
+        for (int i = 0; i < num_pipes; i++)
+        {
+            argvs[i] = (char **)malloc(MAX_ARGS * sizeof(char *));
+            parse_command(commands[i], &argvs[i], &argc);
+        }
+
+        int is_background = 0;
+        if (argc > 0 && strcmp(argvs[num_pipes - 1][argc - 1], "&") == 0)
+        {
+            is_background = 1;
+            argvs[num_pipes - 1][argc - 1] = NULL;
+        }
+
+        if (argvs[0] == NULL)
             continue;
 
-        if (!strcmp(argv[i - 1], "&"))
+        if (strcmp(argvs[0][0], "cd") == 0)
         {
-            amper = 1;
-            argv[i - 1] = NULL;
-        }
-        else
-            amper = 0;
-
-        if (strcmp(argv[0], "cd") == 0)
-        {
-            if (argv[1] == NULL)
+            if (argvs[0][1] == NULL)
             {
-                printf("cd: missing parameter\n");
-                last_status = 1;
+                char *home = getenv("HOME");
+                if (home == NULL)
+                {
+                    printf("cd: HOME environment variable not set\n");
+                    last_status = 1;
+                }
+                else if (chdir(home) != 0)
+                {
+                    perror("chdir");
+                    last_status = 1;
+                }
+                else
+                {
+                    last_status = 0;
+                }
             }
-            else if (chdir(argv[1]) != 0)
+            else if (chdir(argvs[0][1]) != 0)
             {
-                perror("cd");
+                perror("chdir");
                 last_status = 1;
             }
             else
             {
                 last_status = 0;
             }
-            continue;
         }
 
-        if (strcmp(argv[0], "echo") == 0)
+        if (strcmp(argvs[0][0], "echo") == 0)
         {
-            if (argv[1] != NULL && strcmp(argv[1], "$?") == 0)
+            if (argvs[0][1] != NULL && strcmp(argvs[0][1], "$?") == 0)
             {
                 printf("%d\n", last_status);
             }
             else
             {
-                for (int j = 1; argv[j] != NULL; j++)
+                for (int i = 1; argvs[0][i] != NULL; i++)
                 {
-                    if (argv[j][0] == '$')
+                    if (argvs[0][i][0] == '$')
                     {
-                        char *var_name = argv[j] + 1;
-                        int found = 0;
                         for (int k = 0; k < var_count; k++)
                         {
-                            if (strcmp(var_name, variables[k]) == 0)
+                            if (strcmp(argvs[0][i] + 1, variables[k]) == 0)
                             {
                                 printf("%s ", values[k]);
-                                found = 1;
                                 break;
                             }
-                        }
-                        if (!found)
-                        {
-                            printf(" ");
                         }
                     }
                     else
                     {
-                        printf("%s ", argv[j]);
+                        printf("%s ", argvs[0][i]);
                     }
                 }
                 printf("\n");
             }
-            last_status = 0;
             continue;
         }
 
-        if (strcmp(argv[0], "quit") == 0)
+        if (strcmp(argvs[0][0], "quit") == 0)
         {
-            if (last_command != NULL)
-            {
-                free(last_command);
-            }
+            printf("Exiting shell...\n");
+            free(last_command);
             for (int i = 0; i < history_count; i++)
             {
                 free(history[i]);
@@ -438,27 +434,31 @@ void run_shell()
                 free(variables[i]);
                 free(values[i]);
             }
+            for (int i = 0; i < num_pipes; i++)
+            {
+                free(argvs[i]);
+            }
             exit(0);
         }
 
-        if (argv[0][0] == '$')
+        if (argvs[0][0][0] == '$')
         {
-            if (argv[1] && strcmp(argv[1], "=") == 0)
+            if (argvs[0][1] && strcmp(argvs[0][1], "=") == 0)
             {
                 int found = 0;
                 for (int k = 0; k < var_count; k++)
                 {
-                    if (strcmp(argv[0] + 1, variables[k]) == 0)
+                    if (strcmp(argvs[0][0] + 1, variables[k]) == 0)
                     {
-                        values[k] = strdup(argv[2]);
+                        values[k] = strdup(argvs[0][2]);
                         found = 1;
                         break;
                     }
                 }
                 if (!found)
                 {
-                    variables[var_count] = strdup(argv[0] + 1);
-                    values[var_count] = strdup(argv[2]);
+                    variables[var_count] = strdup(argvs[0][0] + 1);
+                    values[var_count] = strdup(argvs[0][2]);
                     var_count++;
                 }
                 last_status = 0;
@@ -466,55 +466,54 @@ void run_shell()
             }
         }
 
-        if (i > 1 && strcmp(argv[i - 2], ">") == 0)
+        if (argc > 1 && strcmp(argvs[0][argc - 2], ">") == 0)
         {
             redirect = 1;
-            argv[i - 2] = NULL;
-            outfile = argv[i - 1];
+            argvs[0][argc - 2] = NULL;
+            outfile = argvs[0][argc - 1];
         }
-        else if (i > 1 && strcmp(argv[i - 2], "2>") == 0)
+        else if (argc > 1 && strcmp(argvs[0][argc - 2], "2>") == 0)
         {
             redirect = 2;
-            argv[i - 2] = NULL;
-            outfile = argv[i - 1];
+            argvs[0][argc - 2] = NULL;
+            outfile = argvs[0][argc - 1];
         }
-        else if (i > 1 && strcmp(argv[i - 2], ">>") == 0)
+        else if (argc > 1 && strcmp(argvs[0][argc - 2], ">>") == 0)
         {
             redirect = 3;
-            argv[i - 2] = NULL;
-            outfile = argv[i - 1];
+            argvs[0][argc - 2] = NULL;
+            outfile = argvs[0][argc - 1];
         }
-        else if (i > 1 && strcmp(argv[i - 2], "<") == 0)
+        else if (argc > 1 && strcmp(argvs[0][argc - 2], "<") == 0)
         {
             in_redirect = 1;
-            argv[i - 2] = NULL;
-            infile = argv[i - 1];
+            argvs[0][argc - 2] = NULL;
+            infile = argvs[0][argc - 1];
         }
-
         else
         {
             redirect = 0;
         }
 
-        if (strcmp(argv[0], "prompt") == 0 && argv[1] && strcmp(argv[1], "=") == 0)
+        if (strcmp(argvs[0][0], "prompt") == 0 && argvs[0][1] && strcmp(argvs[0][1], "=") == 0)
         {
-            strcpy(prompt, argv[2]);
+            strcpy(prompt, argvs[0][2]);
             last_status = 0;
             continue;
         }
 
-        if (strcmp(argv[0], "read") == 0)
+        if (strcmp(argvs[0][0], "read") == 0)
         {
-            if (argv[1] != NULL)
+            if (argvs[0][1] != NULL)
             {
-                printf("%s ", argv[1]);
+                printf("%s ", argvs[0][1]);
                 char input[MAX_COMMAND_LEN];
                 fgets(input, MAX_COMMAND_LEN, stdin);
                 input[strlen(input) - 1] = '\0';
                 int found = 0;
                 for (int k = 0; k < var_count; k++)
                 {
-                    if (strcmp(argv[1], variables[k]) == 0)
+                    if (strcmp(argvs[0][1], variables[k]) == 0)
                     {
                         free(values[k]);
                         values[k] = strdup(input);
@@ -524,7 +523,7 @@ void run_shell()
                 }
                 if (!found)
                 {
-                    variables[var_count] = strdup(argv[1]);
+                    variables[var_count] = strdup(argvs[0][1]);
                     values[var_count] = strdup(input);
                     var_count++;
                 }
@@ -532,36 +531,37 @@ void run_shell()
             continue;
         }
 
-        if (fork() == 0)
+        int pid;
+        for (int i = 0; i < num_pipes; i++)
         {
-            handle_redirects(redirect, outfile, in_redirect, infile);
-
-            if (piping)
+            int fildes[2];
+            pipe(fildes);
+            if ((pid = fork()) == 0)
             {
-                execute_pipe(argv, argv2);
+                if (i != 0)
+                {
+                    dup2(fd, STDIN_FILENO);
+                    close(fd);
+                }
+                if (i != num_pipes - 1)
+                {
+                    dup2(fildes[1], STDOUT_FILENO);
+                    close(fildes[1]);
+                }
+                close(fildes[0]);
+
+                handle_redirects(redirect, outfile, in_redirect, infile);
+
+                execvp(argvs[i][0], argvs[i]);
+                perror("execvp");
+                exit(EXIT_FAILURE);
             }
             else
             {
-                execute_command(argv);
+                wait(&last_status);
+                close(fildes[1]);
+                fd = fildes[0];
             }
-        }
-        else
-        {
-            if (!amper)
-            {
-                retid = wait(&status);
-                last_status = WEXITSTATUS(status);
-            }
-        }
-
-        // NOTE: https://www.geeksforgeeks.org/strstr-in-ccpp/
-        if (strstr(command, "if") != NULL ||
-            strstr(command, "then") != NULL ||
-            strstr(command, "else") != NULL ||
-            strstr(command, "fi") != NULL)
-        {
-            execute_if_process(command);
-            continue;
         }
     }
 }
