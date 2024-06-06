@@ -111,20 +111,14 @@ Sets up the SIGINT handler and starts the shell.
 
 To compile the shell:
 ```bash
-gcc shell.c -o myshell
+make all
 ```
 
 To run the shell:
 ```bash
+make run
+```
+Or
+```bash
 ./myshell
 ```
-
-The shell supports the following features:
-- Basic commands with arguments.
-- Command history with `!!`.
-- Input and output redirection.
-- Piping with `|`.
-- Signal handling for Ctrl-C.
-- Shell variables and substitution.
-- If-else statements.
-- Customizable prompt with `prompt =`.
