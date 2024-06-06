@@ -157,7 +157,6 @@ void clear_line()
 void handle_input()
 {
     char ch;
-    int len = 0;
     int pos = 0;
     memset(command, 0, MAX_COMMAND_LEN);
     display_prompt();
@@ -174,7 +173,6 @@ void handle_input()
         {
             if (pos > 0)
             {
-                len--;
                 pos--;
                 command[pos] = '\0';
                 clear_line();
@@ -194,7 +192,7 @@ void handle_input()
                         {
                             history_cursor--;
                             strcpy(command, history[history_cursor]);
-                            pos = len = strlen(command);
+                            pos = strlen(command);
                             clear_line();
                             display_prompt();
                         }
@@ -205,34 +203,16 @@ void handle_input()
                         {
                             history_cursor++;
                             strcpy(command, history[history_cursor]);
-                            pos = len = strlen(command);
+                            pos = strlen(command);
                             clear_line();
                             display_prompt();
                         }
                         else
                         {
                             command[0] = '\0';
-                            pos = len = 0;
+                            pos = 0;
                             clear_line();
                             display_prompt();
-                        }
-                    }
-                    else if (seq[1] == 'C') // Right arrow
-                    {
-                        if (pos < len)
-                        {
-                            pos++;
-                            printf("\033[C");
-                            fflush(stdout);
-                        }
-                    }
-                    else if (seq[1] == 'D') // Left arrow
-                    {
-                        if (pos > 0)
-                        {
-                            pos--;
-                            printf("\033[D");
-                            fflush(stdout);
                         }
                     }
                 }
@@ -241,8 +221,6 @@ void handle_input()
         else
         {
             command[pos++] = ch;
-            len++;
-            clear_line();
             display_prompt();
         }
     }
@@ -349,6 +327,9 @@ void run_shell()
             parse_command(commands[i], &argvs[i], &argc);
         }
 
+        if (argvs[0] == NULL)
+            continue;
+
         int is_background = 0;
         if (argc > 0 && strcmp(argvs[num_pipes - 1][argc - 1], "&") == 0)
         {
@@ -356,38 +337,23 @@ void run_shell()
             argvs[num_pipes - 1][argc - 1] = NULL;
         }
 
-        if (argvs[0] == NULL)
-            continue;
-
         if (strcmp(argvs[0][0], "cd") == 0)
         {
             if (argvs[0][1] == NULL)
             {
-                char *home = getenv("HOME");
-                if (home == NULL)
-                {
-                    printf("cd: HOME environment variable not set\n");
-                    last_status = 1;
-                }
-                else if (chdir(home) != 0)
-                {
-                    perror("chdir");
-                    last_status = 1;
-                }
-                else
-                {
-                    last_status = 0;
-                }
+                printf("cd: missing parameter\n");
+                last_status = 1;
             }
             else if (chdir(argvs[0][1]) != 0)
             {
-                perror("chdir");
+                perror("cd");
                 last_status = 1;
             }
             else
             {
                 last_status = 0;
             }
+            continue;
         }
 
         if (strcmp(argvs[0][0], "echo") == 0)
